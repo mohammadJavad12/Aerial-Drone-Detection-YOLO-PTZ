@@ -5,6 +5,9 @@ from ultralytics import YOLO
 import supervision as sv
 import time
 import csv
+import os 
+
+os.makedirs("logs", exist_ok=True)
 
 current_pan = 0
 current_tilt = 0
@@ -25,11 +28,6 @@ MAX_ROT_DELTA = 8
 TILT_FORCE_PAN_THRESHOLD = 60.0  
 PAN_SUPPRESS_MIN_SCALE = 0.1      
 
-last_pan_dir = 0         
-pan_momentum_frames = 0   
-PAN_MOMENTUM_DURATION = 15  
-PAN_MOMENTUM_STEP = 3.0   
-
 
 target_id = 0
 
@@ -49,12 +47,13 @@ zoom_center = None
 
 log_rows = []
 start_time = time.time()
-scenario_name = "Moving_NearCenter"
+scenario_name = "Test"
 
 fps_times = []
 last_print = 0
 fourcc = cv2.VideoWriter_fourcc(*'XVID')
 video_writer= cv2.VideoWriter(f"logs/{scenario_name}.avi",fourcc,15,(F_W,F_H))
+
 def pan_suppression_scale():
     elevation = abs(current_tilt - HORIZON_TILT)  
     frac = clamp(elevation / TILT_FORCE_PAN_THRESHOLD, 0.0, 1.0)
@@ -189,35 +188,35 @@ def compute_pan_tilt(bcx, bcy, frame_w, frame_h, fov_deg):
 
     return pan, tilt, v
 
-def save_log(target_idx, boxes):
-    global log_rows, target_id
-
+def save_log(target_idx, boxes, fov_now, frame_w, frame_h):
     row = {
         "frame": len(log_rows),
         "time": round(time.time() - start_time, 3),
         "detected": 0,
-        "target_id": None,
+        'target_id' : target_id,
         "pixel_error": None,
         "angular_error": None,
     }
 
     if target_idx is not None:
         box = boxes[target_idx]
-
         bcx = box.xywh[0, 0].item()
         bcy = box.xywh[0, 1].item()
 
-        dx = bcx - F_W / 2
-        dy = bcy - F_H / 2
+        dx = bcx - frame_w / 2
+        dy = bcy - frame_h / 2
+        pixel_err = math.hypot(dx, dy)
 
-        pixel_err = math.sqrt(dx**2 + dy**2)
-        angular_err = (pixel_err / F_W) * FOV
+        u = (2 * bcx / frame_w) - 1
+        v = 1 - (2 * bcy / frame_h)
+        half_tan = math.tan(math.radians(fov_now) / 2)
+        x = u * (frame_w / frame_h) * half_tan
+        y_ = v * half_tan
+        angular_err = math.degrees(math.atan(math.hypot(x, y_)))
 
         row["detected"] = 1
-        row["target_id"] = target_id
         row["pixel_error"] = round(pixel_err, 3)
         row["angular_error"] = round(angular_err, 3)
-
     elif len(boxes) > 0:
         row["detected"] = 1
 
@@ -237,15 +236,14 @@ def Track():
     detect_fov = Get_fov(FOV, 1.0 / zoom_scale) if zoom_scale > 1.0 else FOV
     
     for r in y.track(img, device='cuda', verbose=False,
-                      tracker="botsort.yaml", conf=0.4):
+                      tracker="custom_bytetrack.yaml", conf=0.4,persist=True):
         d = sv.Detections.from_ultralytics(r)
         annotated = b.annotate(img.copy(), d)
         annotated = l.annotate(
             annotated, d,
             [f"{y.names[c]} {conf:.2f}" for c, conf in zip(d.class_id, d.confidence)]
         )
-        
-
+    
 
 
         boxes = r.cpu().boxes
@@ -294,14 +292,14 @@ def Track():
                     command.encode(),
                     (CAMERA_IP, UDP_PORT_PAN_TILT)
                 )
-                if(pan < abs(12) and tilt < abs(12)):
+                if(abs(pan) < 5 and abs(tilt) < 5):
                     zoom_scale = update_zoom(locked=True)
 
             else:
                 lost_frames += 1
                 zoom_scale = update_zoom(locked=False)
 
-            save_log(target_idx, boxes)
+            save_log(target_idx, boxes,detect_fov,F_W,F_H)
         else:
             lost_frames += 1
             zoom_scale = update_zoom(locked=False)
@@ -343,7 +341,6 @@ try:
         if cv2.waitKey(1) & 255 == ord('q'):
             break
 finally:
-    # Save log regardless of how we exited
     if log_rows:
         with open(f"logs/{scenario_name}.csv", "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
