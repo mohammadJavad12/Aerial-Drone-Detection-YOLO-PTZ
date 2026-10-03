@@ -15,7 +15,7 @@ current_tilt = 0
 HORIZON_TILT = 0
 udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-y = YOLO("yolo11n_drone.pt")
+y = YOLO("models/Base_Model/yolo11n_drone.pt") # Load Your Desired Model
 b = sv.BoxAnnotator()
 l = sv.LabelAnnotator()
 
@@ -29,7 +29,7 @@ TILT_FORCE_PAN_THRESHOLD = 60.0
 PAN_SUPPRESS_MIN_SCALE = 0.1      
 
 
-target_id = 0
+target_id = None
 
 lost_frames = 0
 LOST_FRAME_THRESHOLD = 20
